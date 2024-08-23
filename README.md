@@ -149,4 +149,4 @@ Configuration and Secrets Management: Facilitates centralized management of conf
 
 ### Exercise 4: Kubernetes Deployment
 
-All yaml files in the root project
+All yaml files in the root k8 package project, you have a steps.txt with the guideline of the deployment
