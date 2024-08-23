@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Basic infrastructure for deploying a Spring Boot application with PostgreSQL and MongoDB Atlas
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    Description: EC2 instance type (e.g., t2.micro, t2.small)
+  
+  DBUsername:
+    Description: The PostgreSQL database admin account username
+    Type: String
+    Default: masteruser
+
+  DBPassword:
+    Description: The PostgreSQL database admin account password
+    Type: String
+    NoEcho: true
+
+  MongoDBAtlasURI:
+    Description: MongoDB Atlas connection URI
+    Type: String
+
+  MongoDBUsername:
+    Description: The MongoDB username
+    Type: String
+    Default: mongoUser
+
+  MongoDBPassword:
+    Description: The MongoDB password
+    Type: String
+    NoEcho: true
+
+  AllowedSSHIP:
+    Description: IP address range allowed to SSH into the EC2 instance (e.g., 203.0.113.0/24)
+    Type: String
+    Default: 0.0.0.0/0
+
+  AllowedHTTPIP:
+    Description: IP address range allowed to access the HTTP port on the EC2 instance (e.g., 203.0.113.0/24)
+    Type: String
+    Default: 0.0.0.0/0
+
+Resources:
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: MyVPC
+
+  MyPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: MyPublicSubnet
+
+  MyPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: MyPrivateSubnet
+
+  MyInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: MyInternetGateway
+
+  MyVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyInternetGateway
+
+  MyEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: ami-0abcdef1234567890
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !Ref MyPublicSubnet
+          GroupSet:
+            - !Ref MySecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y java-1.8.0-openjdk
+          git clone https://github.com/mauriayllon/backend_finconecta.git /home/ec2-user/app
+          cd /home/ec2-user/app
+          export SPRING_DATA_MONGODB_URI=${MongoDBAtlasURI}
+          export SPRING_DATA_MONGODB_USERNAME=${MongoDBUsername}
+          export SPRING_DATA_MONGODB_PASSWORD=${MongoDBPassword}
+          ./mvnw spring-boot:run
+
+  MySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH, HTTP, and PostgreSQL traffic
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSSHIP  # Restrict SSH access
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref AllowedHTTPIP  # Restrict HTTP access
+
+  MyDBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow database traffic
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref MySecurityGroup  # Restrict access to the EC2 instance
+
+  MyPostgreSQLDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: postgres
+      DBInstanceClass: db.t2.micro
+      AllocatedStorage: 20
+      DBName: mydb
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      VPCSecurityGroups:
+        - !Ref MyDBSecurityGroup
+      DBSubnetGroupName: !Ref MyDBSubnetGroup
+      BackupRetentionPeriod: 7
+      MultiAZ: false  # Set to true for high availability
+
+  MyDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for PostgreSQL DB
+      SubnetIds:
+        - !Ref MyPrivateSubnet
+
+Outputs:
+  EC2PublicIP:
+    Description: Public IP of the EC2 instance
+    Value: !GetAtt MyEC2Instance.PublicIp
+
+  PostgreSQLJDBCURL:
+    Description: JDBC connection string for PostgreSQL
+    Value: !Join
+      - ''
+      - 'jdbc:postgresql://'
+      - !GetAtt MyPostgreSQLDB.Endpoint.Address
+      - ':5432/mydb'
+
+  MongoDBAtlasConnectionURI:
+    Description: MongoDB Atlas connection URI
+    Value: !Ref MongoDBAtlasURI
